@@ -34,6 +34,13 @@ npm install
 
 ## Configuration
 
+### Claude Code CLI
+
+Add the MCP server using the Claude CLI:
+```bash
+claude mcp add-json gcp-mcp --scope user '{ "command": "sh", "args": [ "-c", "npx -y gcp-mcp" ] }'
+```
+
 ### Claude Desktop
 
 1. Open Claude desktop app and go to Settings -> Developer -> Edit Config
@@ -103,7 +110,12 @@ Replace `/path/to/gcp-mcp` with the actual path to your project directory if usi
 1. Set up GCP credentials:
    - Set up application default credentials using `gcloud auth application-default login`
 
-2. Refresh your AI assistant (Claude Desktop/Cursor/Windsurf)
+2. Enable required APIs (replace `your-project-id` with your actual project ID):
+   ```bash
+   gcloud services enable cloudresourcemanager.googleapis.com --project=your-project-id
+   ```
+
+3. Refresh your AI assistant (Claude Desktop/Cursor/Windsurf)
 
 ## Usage
 
