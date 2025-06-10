@@ -208,6 +208,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: [],
         },
+      },
+      {
+        name: "deploy-to-cloudrun",
+        description: "Deploy a container to Cloud Run",
+        inputSchema: {
+          type: "object",
+          properties: {
+            serviceName: {
+              type: "string",
+              description: "Name of the Cloud Run service",
+            },
+            image: {
+              type: "string",
+              description: "Container image URL (e.g., gcr.io/project/image:tag)",
+            },
+            region: {
+              type: "string",
+              description: "Region to deploy to (defaults to selected region)",
+            },
+            port: {
+              type: "number",
+              description: "Container port (default: 8080)",
+            },
+            environmentVariables: {
+              type: "object",
+              description: "Environment variables as key-value pairs",
+            },
+            cpu: {
+              type: "string",
+              description: "CPU allocation (e.g., '1', '2', '4')",
+            },
+            memory: {
+              type: "string",
+              description: "Memory allocation (e.g., '512Mi', '1Gi', '2Gi')",
+            },
+            maxInstances: {
+              type: "number",
+              description: "Maximum number of instances (default: 100)",
+            },
+            minInstances: {
+              type: "number",
+              description: "Minimum number of instances (default: 0)",
+            },
+            allowUnauthenticated: {
+              type: "boolean",
+              description: "Allow unauthenticated requests (default: false)",
+            }
+          },
+          required: ["serviceName", "image"],
+        },
       }
     ],
   };
@@ -245,6 +295,19 @@ const ListGKEClustersSchema = z.object({
 const GetLogsSchema = z.object({
   filter: z.string().optional(),
   pageSize: z.number().optional(),
+});
+
+const DeployToCloudRunSchema = z.object({
+  serviceName: z.string(),
+  image: z.string(),
+  region: z.string().optional(),
+  port: z.number().optional(),
+  environmentVariables: z.record(z.string()).optional(),
+  cpu: z.string().optional(),
+  memory: z.string().optional(),
+  maxInstances: z.number().optional(),
+  minInstances: z.number().optional(),
+  allowUnauthenticated: z.boolean().optional(),
 });
 
 interface GKECluster {
@@ -433,7 +496,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           return createTextResponse("No billing account associated with this project.");
         }
 
-        // Get billing account details
+         // Get billing account details
         const [account] = await billingClient.getBillingAccount({
           name: billingAccount
         });
@@ -595,7 +658,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
       try {
         const sqlClient = new SqlInstancesServiceClient({
-          fallback: 'rest'  // Use HTTP/1.1 fallback mode instead of gRPC
+           fallback: 'rest'  // Use HTTP/1.1 fallback mode instead of gRPC
         });
         
         const request = {
@@ -645,6 +708,138 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       } catch (error: any) {
         console.error('Error getting logs:', error);
         return createTextResponse(`Error getting logs: ${error.message}`);
+      }
+    } else if (name === "deploy-to-cloudrun") {
+      const {
+        serviceName,
+        image,
+        region,
+        port = 8080,
+        environmentVariables,
+        cpu = '1000m',
+        memory = '512Mi',
+        maxInstances = 100,
+        minInstances = 0,
+        allowUnauthenticated = false
+      } = DeployToCloudRunSchema.parse(args);
+      
+      if (!selectedProject) {
+        return createTextResponse("No project selected. Please select a project first.");
+      }
+
+      const targetRegion = region || selectedRegion;
+      const normalizedServiceName = serviceName.toLowerCase().replace(/[^a-z0-9\-]/g, '-').replace(/^[^a-z]/, 'a').replace(/-+$/, '').substring(0, 49);
+
+      try {
+        const runClient = new ServicesClient();
+        const parent = `projects/${selectedProject}/locations/${targetRegion}`;
+
+        const envVars = environmentVariables ? 
+          Object.entries(environmentVariables).map(([key, value]) => ({ name: key, value })) : [];
+
+        const service = {
+          template: {
+            containers: [{
+              image,
+              ports: [{
+                containerPort: port
+              }],
+              env: envVars,
+              resources: {
+                limits: {
+                  cpu,
+                  memory
+                }
+              }
+            }],
+            scaling: {
+              maxInstanceCount: maxInstances,
+              minInstanceCount: minInstances
+            }
+          },
+          traffic: [{
+            percent: 100,
+            type: 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST'
+          }]
+        };
+
+        let result;
+        let isUpdate = false;
+
+        try {
+          const servicePath = `${parent}/services/${normalizedServiceName}`;
+          const [existingService] = await runClient.getService({ name: servicePath });
+          if (existingService && existingService.metadata) {
+            isUpdate = true;
+          }
+        } catch (error: any) {
+          if (error.code !== 5) {
+            console.error('Error checking existing service:', error.message);
+          }
+        }
+
+        if (isUpdate) {
+          const servicePath = `${parent}/services/${normalizedServiceName}`;
+          const [operation] = await retry(async () => await runClient.updateService({
+            service: {
+              name: servicePath,
+              ...service
+            },
+            allowMissing: false
+          }));
+          [result] = await operation.promise();
+        } else {
+          const [operation] = await retry(async () => await runClient.createService({
+            parent,
+            serviceId: normalizedServiceName,
+            service: service
+          }));
+          [result] = await operation.promise();
+        }
+
+        if (allowUnauthenticated && result) {
+          try {
+            const servicePath = `${parent}/services/${normalizedServiceName}`;
+            await retry(async () => {
+              const policyRequest = {
+                resource: servicePath,
+                policy: {
+                  bindings: [{
+                    role: 'roles/run.invoker',
+                    members: ['allUsers']
+                  }]
+                }
+              };
+              return await runClient.setIamPolicy(policyRequest);
+            });
+          } catch (iamError: any) {
+            console.error('Warning: Could not set public access policy:', iamError.message);
+          }
+        }
+
+        const serviceUrl = result?.uri || result?.status?.url || `https://${normalizedServiceName}-${selectedProject}.a.run.app`;
+        
+        return createTextResponse(JSON.stringify({
+          serviceName: normalizedServiceName,
+          originalServiceName: serviceName,
+          url: serviceUrl,
+          region: targetRegion,
+          status: result?.conditions?.[0]?.state || result?.status?.conditions?.[0]?.status || 'Deploying',
+          ready: result?.conditions?.[0]?.state === 4 || result?.status?.conditions?.[0]?.status === 'True',
+          image,
+          lastModified: result?.createTime || result?.metadata?.creationTimestamp || new Date().toISOString(),
+          revision: result?.latestRevision || result?.status?.latestRevision,
+          operation: isUpdate ? 'update' : 'create'
+        }, null, 2));
+      } catch (error: any) {
+        console.error('Error deploying to Cloud Run:', error);
+        if (error.code === 7) {
+          return createTextResponse("Error: Cloud Run API is not enabled. Please enable it in the Google Cloud Console.");
+        }
+        if (error.code === 3) {
+          return createTextResponse(`Error: Invalid request - ${error.message}. Check service name format and template structure.`);
+        }
+        return createTextResponse(`Error deploying to Cloud Run: ${error.message}`);
       }
     } else {
       throw new Error(`Unknown tool: ${name}`);
@@ -708,4 +903,4 @@ startServer();
 
 const createTextResponse = (text: string) => ({
   content: [{ type: "text", text }],
-}); 
+});
