@@ -20,6 +20,7 @@ import { BudgetServiceClient } from '@google-cloud/billing-budgets';
 import { ClusterManagerClient } from '@google-cloud/container';
 import { Logging, Entry, Log } from '@google-cloud/logging';
 import { SqlInstancesServiceClient } from '@google-cloud/sql';
+import axios from 'axios';
 
 const codePrompt = `Your job is to answer questions about GCP environment by writing Javascript/TypeScript code using Google Cloud Client Libraries. The code must adhere to a few rules:
 - Must use promises and async/await
@@ -208,6 +209,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: [],
         },
+      },
+      {
+        name: "get_gke_cluster_credentials",
+        description: "Get GKE cluster credentials for running kubectl commands",
+        inputSchema: {
+          type: "object",
+          properties: {
+            clusterName: {
+              type: "string",
+              description: "The name of the GKE cluster",
+            },
+            location: {
+              type: "string",
+              description: "The location (region or zone) of the GKE cluster",
+            },
+          },
+          required: ["clusterName", "location"],
+        },
+      },
+      {
+        name: "run_gke_command",
+        description: "Run a command on a GKE cluster",
+        inputSchema: {
+          type: "object",
+          properties: {
+            clusterEndpoint: {
+              type: "string",
+              description: "The endpoint of the GKE cluster",
+            },
+            clusterCaCertificate: {
+              type: "string",
+              description: "The CA certificate of the GKE cluster",
+            },
+            path: {
+              type: "string",
+              description: "The path to the Kubernetes resource (e.g., /api/v1/pods)",
+            },
+          },
+          required: ["clusterEndpoint", "clusterCaCertificate", "path"],
+        },
       }
     ],
   };
@@ -245,6 +286,17 @@ const ListGKEClustersSchema = z.object({
 const GetLogsSchema = z.object({
   filter: z.string().optional(),
   pageSize: z.number().optional(),
+});
+
+const GetGKEClusterCredentialsSchema = z.object({
+  clusterName: z.string(),
+  location: z.string(),
+});
+
+const RunGKECommandSchema = z.object({
+  clusterEndpoint: z.string(),
+  clusterCaCertificate: z.string(),
+  path: z.string(),
 });
 
 interface GKECluster {
@@ -645,6 +697,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       } catch (error: any) {
         console.error('Error getting logs:', error);
         return createTextResponse(`Error getting logs: ${error.message}`);
+      }
+    } else if (name === "get_gke_cluster_credentials") {
+      const { clusterName, location } = GetGKEClusterCredentialsSchema.parse(args);
+      if (!selectedProject) {
+        return createTextResponse("No project selected. Please select a project first.");
+      }
+
+      try {
+        const containerClient = new ClusterManagerClient();
+        const [cluster] = await containerClient.getCluster({
+          name: `projects/${selectedProject}/locations/${location}/clusters/${clusterName}`,
+        });
+
+        return createTextResponse(JSON.stringify({
+          clusterEndpoint: cluster.endpoint,
+          clusterCaCertificate: cluster.masterAuth?.clusterCaCertificate,
+        }, null, 2));
+      } catch (error: any) {
+        console.error('Error getting GKE cluster credentials:', error);
+        return createTextResponse(`Error getting GKE cluster credentials: ${error.message}`);
+      }
+    } else if (name === "run_gke_command") {
+      const { clusterEndpoint, clusterCaCertificate, path } = RunGKECommandSchema.parse(args);
+
+      try {
+        const accessToken = await selectedProjectCredentials.getAccessToken();
+        const response = await axios.get(`https://${clusterEndpoint}${path}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+            httpsAgent: new (require('https').Agent)({
+              ca: clusterCaCertificate,
+            }),
+          }
+        );
+
+        return createTextResponse(JSON.stringify(response.data, null, 2));
+      } catch (error: any) {
+        console.error('Error running GKE command:', error);
+        return createTextResponse(`Error running GKE command: ${error.message}`);
       }
     } else {
       throw new Error(`Unknown tool: ${name}`);
