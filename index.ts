@@ -699,7 +699,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         console.error('Error getting logs:', error);
         return createTextResponse(`Error getting logs: ${error.message}`);
       }
-    } else if (name === "get_gke_cluster_credentials") {
+    } else if (name === "get-gke-cluster-credentials") {
       const { clusterName, location } = GetGKEClusterCredentialsSchema.parse(args);
       if (!selectedProject) {
         return createTextResponse("No project selected. Please select a project first.");
@@ -720,7 +720,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         return createTextResponse(`Error getting GKE cluster credentials: ${error.message}`);
       }
 
-    } else if (name === "run_gke_command") {
+    } else if (name === "run-gke-command") {
       const { clusterEndpoint, clusterCaCertificate, path } = RunGKECommandSchema.parse(args);
 
       // Validate the path parameter
