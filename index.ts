@@ -21,6 +21,7 @@ import { ClusterManagerClient } from '@google-cloud/container';
 import { Logging, Entry, Log } from '@google-cloud/logging';
 import { SqlInstancesServiceClient } from '@google-cloud/sql';
 import axios from 'axios';
+import https from 'https';
 
 const codePrompt = `Your job is to answer questions about GCP environment by writing Javascript/TypeScript code using Google Cloud Client Libraries. The code must adhere to a few rules:
 - Must use promises and async/await
@@ -718,7 +719,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         console.error('Error getting GKE cluster credentials:', error);
         return createTextResponse(`Error getting GKE cluster credentials: ${error.message}`);
       }
-import https from 'https';
 
     } else if (name === "run_gke_command") {
       const { clusterEndpoint, clusterCaCertificate, path } = RunGKECommandSchema.parse(args);
