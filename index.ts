@@ -718,21 +718,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         console.error('Error getting GKE cluster credentials:', error);
         return createTextResponse(`Error getting GKE cluster credentials: ${error.message}`);
       }
+import https from 'https';
+
     } else if (name === "run_gke_command") {
       const { clusterEndpoint, clusterCaCertificate, path } = RunGKECommandSchema.parse(args);
 
+      // Validate the path parameter
+      if (!path.startsWith('/api/') && !path.startsWith('/apis/')) {
+        return createTextResponse("Error: Path must start with /api/ or /apis/");
+      }
+
+      // Validate clusterEndpoint format
+      if (!/^[a-zA-Z0-9.-]+$/.test(clusterEndpoint)) {
+        return createTextResponse("Error: Invalid cluster endpoint format");
+      }
+
       try {
         const accessToken = await selectedProjectCredentials.getAccessToken();
-        const response = await axios.get(`https://${clusterEndpoint}${path}`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-            },
-            httpsAgent: new (require('https').Agent)({
-              ca: clusterCaCertificate,
-            }),
-          }
-        );
+        const response = await axios.get(`https://${clusterEndpoint}${path}`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          httpsAgent: new https.Agent({
+            ca: clusterCaCertificate,
+          }),
+          timeout: 30000, // 30 second timeout
+          maxRedirects: 0, // Disable redirects for security
+        });
 
         return createTextResponse(JSON.stringify(response.data, null, 2));
       } catch (error: any) {
