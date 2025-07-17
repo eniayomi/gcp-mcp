@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/eniayomi-gcp-mcp-badge.png)](https://mseep.ai/app/eniayomi-gcp-mcp)
+
 # GCP MCP
 
 A Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with your Google Cloud Platform environment. This allows for natural language querying and management of your GCP resources during conversations.
